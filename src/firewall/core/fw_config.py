@@ -797,14 +797,50 @@ class FirewallConfig:
 
     # zones
 
-    def get_zones(self):
-        return sorted(set(list(self._zones.keys()) + list(self._builtin_zones.keys())))
+    def get_zones(self, select=lambda zone: True):
+        return sorted(
+            set(
+                [zone.name for zone in self._zones.values() if select(zone)]
+                + list(self._builtin_zones.keys())
+            )
+        )
 
     def add_zone(self, obj):
         if obj.builtin:
             self._builtin_zones[obj.name] = obj
         else:
             self._zones[obj.name] = obj
+        if "/" in obj.name:
+            name = obj.name.split("/")[0]
+            combined = None
+            if name in self._zones:
+                if self._zones[name].combined:
+                    combined = self._zones[name]
+                else:
+                    log.debug1(
+                        "'%s' can't be combined with '%s'"
+                        % (self._zones[name].filename, obj.filename)
+                    )
+            if not combined:
+                log.debug1("Creating combined zone '%s'", name)
+                combined = Zone()
+                combined.name = name
+                combined.filename = ""
+                combined.check_name(combined.name)
+                combined.path = obj.path
+                combined.default = obj.path.startswith(config.ETC_FIREWALLD)
+                combined.forward = False  # see note in zone_reader()
+                self._zones[name] = combined
+            log.debug1(
+                "Combining zone '%s' using '%s%s%s'",
+                name,
+                os.path.dirname(obj.path),
+                os.sep,
+                obj.name,
+            )
+            filename = ",".join(combined.filename.split(",") + [obj.filename])
+            combined.combine(obj)
+            combined.filename = filename
 
     def forget_zone(self, name):
         if name in self._builtin_zones:
@@ -812,9 +848,10 @@ class FirewallConfig:
         if name in self._zones:
             del self._zones[name]
 
-    def get_zone(self, name):
+    def get_zone(self, name, select=lambda z: True):
         if name in self._zones:
-            return self._zones[name]
+            if select(self._zones[name]):
+                return self._zones[name]
         elif name in self._builtin_zones:
             return self._builtin_zones[name]
         raise FirewallError(errors.INVALID_ZONE, "get_zone(): %s" % name)
@@ -987,7 +1024,9 @@ class FirewallConfig:
 
     def check_builtin_zone(self, obj):
         if obj.builtin or not obj.default:
-            raise FirewallError(errors.BUILTIN_ZONE, "'%s' is built-in zone" % obj.name)
+            raise FirewallError(
+                errors.BUILTIN_ZONE, "'%s' is built-in zone " % obj.name
+            )
 
     def remove_zone(self, obj):
         self.check_builtin_zone(obj)
