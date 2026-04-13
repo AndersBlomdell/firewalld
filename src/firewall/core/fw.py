@@ -34,12 +34,12 @@ from firewall.core.io.firewalld_conf import firewalld_conf
 from firewall.core.io.direct import Direct
 from firewall.core.io.service import service_reader
 from firewall.core.io.icmptype import icmptype_reader
-from firewall.core.io.zone import zone_reader, Zone
+from firewall.core.io.zone import zone_reader
 from firewall.core.io.ipset import ipset_reader
 from firewall.core.ipset import IPSET_TYPES
 from firewall.core.io.helper import helper_reader
 from firewall.core.io.policy import policy_reader
-from firewall.core.io.functions import check_on_disk_config
+from firewall.core.io.functions import check_on_disk_config, list_zone_files
 from firewall.core.rich import Rich_Rule
 from firewall import errors
 from firewall.errors import FirewallError
@@ -514,37 +514,8 @@ class Firewall:
 
         self.direct.set_permanent_config(copy.deepcopy(self.config.get_direct()))
 
-        # copy combined permanent zones to runtime
-        # zones with a '/' in the name will be combined into one runtime zone
-        combined_zones = {}
-        for zone in self.config.get_zones():
-            z_obj = self.config.get_zone(zone)
-            if "/" not in z_obj.name:
-                self.zone.add_zone(copy.deepcopy(self.config.get_zone(zone)))
-                continue
-
-            combined_name = os.path.basename(z_obj.path)
-            if combined_name not in combined_zones:
-                combined_zone = Zone()
-                combined_zone.name = combined_name
-                combined_zone.check_name(combined_zone.name)
-                combined_zone.path = z_obj.path
-                combined_zone.default = False
-                combined_zone.forward = False  # see note in zone_reader()
-
-                combined_zones[combined_name] = combined_zone
-
-            log.debug1(
-                "Combining zone '%s' using '%s%s%s'",
-                combined_name,
-                z_obj.path,
-                os.sep,
-                z_obj.filename,
-            )
-            combined_zones[combined_name].combine(z_obj)
-
-        for zone in combined_zones:
-            self.zone.add_zone(combined_zones[zone])
+        for zone in self.config.get_zones(select=lambda z: "/" not in z.name):
+            self.zone.add_zone(copy.deepcopy(self.config.get_zone(zone)))
 
     def _start_load_direct_rules(self):
         # load direct rules
@@ -834,33 +805,12 @@ class Firewall:
 
             self.config.add_icmptype(obj)
 
-    def _loader_zones(self, path, combine=False):
-        if not os.path.isdir(path):
-            return
-
-        for filename in sorted(os.listdir(path)):
-            if not filename.endswith(".xml"):
-                if path.startswith(config.ETC_FIREWALLD) and os.path.isdir(
-                    "%s/%s" % (path, filename)
-                ):
-                    # Combined zones are added to permanent config
-                    # individually. They're coalesced into one object when
-                    # added to the runtime
-                    self._loader_zones("%s/%s" % (path, filename), combine=True)
-                continue
-
+    def _loader_zones(self, path):
+        for filename in list_zone_files(path):
             name = "%s/%s" % (path, filename)
             log.debug1("Loading zone file '%s'", name)
 
-            obj = zone_reader(filename, path, no_check_name=combine)
-            if combine:
-                # Change name for permanent configuration
-                obj.name = "%s/%s" % (
-                    os.path.basename(path),
-                    os.path.basename(filename)[0:-4],
-                )
-                obj.check_name(obj.name)
-
+            obj = zone_reader(filename, path)
             if obj.name in self.config.get_zones():
                 orig_obj = self.config.get_zone(obj.name)
                 log.debug1(
@@ -868,7 +818,6 @@ class Firewall:
                 )
             elif obj.path.startswith(config.ETC_FIREWALLD):
                 obj.default = True
-
             self.config.add_zone(obj)
 
     def cleanup(self):
@@ -1071,9 +1020,11 @@ class Firewall:
             log.debug1(
                 "Setting policy to '%s'%s",
                 policy,
-                f" (ReloadPolicy={firewalld_conf._unparse_reload_policy(policy_details)})"
-                if policy == "DROP"
-                else "",
+                (
+                    f" (ReloadPolicy={firewalld_conf._unparse_reload_policy(policy_details)})"
+                    if policy == "DROP"
+                    else ""
+                ),
             )
 
             for backend in self.enabled_backends():

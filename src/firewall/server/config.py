@@ -1211,7 +1211,8 @@ class FirewallDConfig(DbusServiceObject):
         log.debug1("config.getZoneNames()")
         zones = []
         for obj in self.zones:
-            zones.append(obj.obj.name)
+            if not obj.obj.combined:
+                zones.append(obj.obj.name)
         return sorted(zones)
 
     @dbus_service_method(

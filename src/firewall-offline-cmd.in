@@ -1634,7 +1634,7 @@ try:
 
     # zones
     elif a.get_zones:
-        zones = fw.config.get_zones()
+        zones = fw.config.get_zones(select=lambda z: not z.combined)
         cmd.print_and_exit(" ".join(zones))
 
     elif a.new_zone:
@@ -1671,7 +1671,7 @@ try:
         fw.config.load_zone_defaults(obj)
 
     elif a.info_zone:
-        zone = fw.config.get_zone(a.info_zone)
+        zone = fw.config.get_zone(a.info_zone, select=lambda z: not z.combined)
         settings = FirewallClientZoneSettings(fw.config.get_zone_config_dict(zone))
         cmd.print_zone_info(a.info_zone, settings, default_zone=fw.get_default_zone())
         sys.exit(0)
